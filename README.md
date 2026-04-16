@@ -1,5 +1,7 @@
 # zyte-cli
 
+> **Community project** — This is not an official Zyte product and is not maintained or supported by Zyte. For official support, refer to the [Zyte documentation](https://docs.zyte.com) or [Zyte support channels](https://www.zyte.com/contact/).
+
 A command-line interface for the [Zyte API](https://docs.zyte.com/zyte-api/get-started.html) and [Scrapy Cloud](https://docs.zyte.com/scrapy-cloud.html). Fetch pages, render JavaScript, take screenshots, extract structured data with AI, and manage cloud spider jobs — all from your terminal.
 
 ## Installation

@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import sys
 from enum import Enum
 from typing import Any
@@ -21,8 +22,22 @@ class OutputFormat(str, Enum):
     csv = "csv"
 
 
-_err_console = Console(stderr=True)
-_out_console = Console()
+def _no_color_enabled() -> bool:
+    """Return True if color should be disabled (NO_COLOR env var or explicit flag)."""
+    return "NO_COLOR" in os.environ
+
+
+_no_color = _no_color_enabled()
+_err_console = Console(stderr=True, no_color=_no_color)
+_out_console = Console(no_color=_no_color)
+
+
+def configure_color(no_color: bool) -> None:
+    """Re-initialise module-level consoles. Call after parsing --no-color."""
+    global _no_color, _err_console, _out_console
+    _no_color = no_color
+    _err_console = Console(stderr=True, no_color=no_color)
+    _out_console = Console(no_color=no_color)
 
 
 def print_result(
@@ -54,6 +69,20 @@ def print_error(message: str) -> None:
 def print_info(message: str, quiet: bool = False) -> None:
     if not quiet:
         _err_console.print(f"[dim]{message}[/dim]")
+
+
+def print_verbose(label: str, data: Any) -> None:
+    """Print a verbose section header and pretty JSON payload to stderr."""
+    rendered = json.dumps(data, indent=2, default=str)
+    _err_console.print(f"\n[bold cyan]{label}[/bold cyan]")
+    _err_console.print(Syntax(rendered, "json", theme="monokai", word_wrap=True))
+
+
+def print_dry_run(payload: Any, label: str = "DRY RUN — would send to Zyte API:") -> None:
+    """Print the payload that would be sent, without making the request."""
+    rendered = json.dumps(payload, indent=2, default=str)
+    _err_console.print(f"\n[bold yellow]{label}[/bold yellow]")
+    _err_console.print(Syntax(rendered, "json", theme="monokai", word_wrap=True))
 
 
 def _render(data: Any, fmt: OutputFormat) -> str:

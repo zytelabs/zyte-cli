@@ -8,9 +8,11 @@ import json
 from typing import Any
 
 import httpx
+import typer
 
 from zyte_cli.config import ZyteSettings
 from zyte_cli.errors import ZyteAPIError, ZyteRequestValidationError, build_zyte_error, is_retryable_error
+from zyte_cli.output import print_verbose, print_dry_run
 
 
 TEXTUAL_CONTENT_TYPES = (
@@ -48,6 +50,13 @@ class ZyteClient:
     async def extract(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._validate_payload(payload)
 
+        if self.settings.dry_run:
+            print_dry_run(payload)
+            raise typer.Exit(0)
+
+        if self.settings.verbose:
+            print_verbose("→ Request payload", payload)
+
         async def operation() -> dict[str, Any]:
             response = await self._client.post(
                 self.settings.base_url,
@@ -57,7 +66,12 @@ class ZyteClient:
             )
             return await self._handle_response(response)
 
-        return await self._retry(operation)
+        result = await self._retry(operation)
+
+        if self.settings.verbose:
+            print_verbose("← Response", result)
+
+        return result
 
     async def _retry(self, operation: Any) -> Any:
         attempt = 0

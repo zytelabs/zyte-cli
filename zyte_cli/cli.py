@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib.metadata
 import json
 import sys
 from pathlib import Path
@@ -17,7 +18,7 @@ from zyte_cli.commands.render import run_render
 from zyte_cli.commands.screenshot import run_screenshot
 from zyte_cli.config import get_settings
 from zyte_cli.errors import ZyteAPIError, ZyteRequestValidationError
-from zyte_cli.output import OutputFormat, print_error, print_info, print_result
+from zyte_cli.output import OutputFormat, configure_color, print_error, print_info, print_result
 
 app = typer.Typer(
     name="zyte",
@@ -29,6 +30,13 @@ app = typer.Typer(
 # Subcommand groups
 app.add_typer(extract.app, name="extract")
 app.add_typer(cloud.app, name="cloud")
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        version = importlib.metadata.version("zyte-cli")
+        typer.echo(f"zyte-cli {version}")
+        raise typer.Exit(0)
 
 
 @app.callback()
@@ -47,20 +55,38 @@ def main(
             show_default=False,
         ),
     ] = None,
+    version: Annotated[
+        Optional[bool],
+        typer.Option("--version", callback=_version_callback, is_eager=True, help="Show version and exit"),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Print the Zyte API request payload and raw response")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the API payload that would be sent, without making the request")] = False,
+    no_color: Annotated[bool, typer.Option("--no-color", envvar="NO_COLOR", help="Disable color output")] = False,
+    timeout: Annotated[Optional[float], typer.Option("--timeout", help="Per-request timeout in seconds (default: 120)")] = None,
 ) -> None:
     """[bold]zyte[/bold] — CLI for the Zyte API and Scrapy Cloud.
 
     Set [bold]ZYTE_API_KEY[/bold] to use Zyte API commands.
     Set [bold]SCRAPY_CLOUD_API_KEY[/bold] (or [bold]SHUB_APIKEY[/bold]) for cloud commands.
     """
+    if no_color:
+        configure_color(no_color=True)
+
     ctx.ensure_object(dict)
     ctx.obj["cloud_api_key"] = cloud_api_key
     ctx.obj["api_key_override"] = api_key
+    ctx.obj["verbose"] = verbose
+    ctx.obj["dry_run"] = dry_run
 
     command_name = ctx.invoked_subcommand
     if command_name and command_name != "cloud":
         try:
-            ctx.obj["settings"] = get_settings(api_key_override=api_key)
+            ctx.obj["settings"] = get_settings(
+                api_key_override=api_key,
+                timeout=timeout,
+                verbose=verbose,
+                dry_run=dry_run,
+            )
         except RuntimeError as e:
             print_error(str(e))
             raise typer.Exit(3)
@@ -86,7 +112,17 @@ def cmd_fetch(
     output: Annotated[Optional[str], typer.Option("--output", "-o", help="Write output to file")] = None,
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Suppress progress output")] = False,
 ) -> None:
-    """Fetch a URL using Zyte HTTP mode (no browser rendering)."""
+    """Fetch a URL using Zyte HTTP mode (no browser rendering).
+
+    Fast and cheap — ideal for APIs, sitemaps, feeds, and static HTML pages.
+    Use 'zyte render' if the page requires JavaScript execution.
+
+    Headers must be passed as KEY=VALUE pairs (repeatable):
+
+        zyte fetch URL -H Accept=application/json -H X-Custom=val
+
+    Use --body-text or --body-base64 to send a request body (mutually exclusive).
+    """
     if body_text is not None and body_base64_opt is not None:
         print_error("provide only one of --body-text or --body-base64")
         raise typer.Exit(2)
@@ -132,7 +168,15 @@ def cmd_render(
     output: Annotated[Optional[str], typer.Option("--output", "-o", help="Write output to file")] = None,
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Suppress progress output")] = False,
 ) -> None:
-    """Render a page in a real browser and return the HTML."""
+    """Render a page in a real browser and return the HTML.
+
+    Executes JavaScript and waits for the page to fully load before returning.
+    Use this instead of 'zyte fetch' when content is rendered client-side.
+
+    Browser actions (click, type, scroll, etc.) can be passed as a JSON array
+    via --actions (file path) or --actions-inline (inline string). These are
+    mutually exclusive.
+    """
     if actions and actions_inline:
         print_error("provide only one of --actions or --actions-inline")
         raise typer.Exit(2)
@@ -188,7 +232,13 @@ def cmd_screenshot(
 ) -> None:
     """Take a screenshot of a page via Zyte browser.
 
-    When --output ends in .jpg/.jpeg/.png, the raw image bytes are written directly.
+    When --output ends in .jpg/.jpeg/.png, the raw image bytes are written
+    directly to the file. Otherwise, output is JSON with a base64-encoded
+    'image_base64' field.
+
+    Browser actions (click, type, scroll, etc.) can be passed as a JSON array
+    via --actions (file path) or --actions-inline (inline string). These are
+    mutually exclusive.
     """
     if image_fmt not in ("jpeg", "jpg", "png"):
         print_error("--format must be jpeg or png")

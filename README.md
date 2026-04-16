@@ -112,7 +112,7 @@ When `--output` ends in `.jpg`, `.jpeg`, or `.png`, the image bytes are written 
 
 ### `zyte extract` — AI data extraction
 
-Extract structured data from web pages using Zyte's AI extraction engine. All subcommands accept a `--from` flag to control the fetch method.
+Extract structured data from web pages using Zyte's AI extraction engine. All subcommands accept a `--from` flag to control the fetch method, and support **multiple URLs** — pass more than one URL to fetch them concurrently and receive a JSON array of results.
 
 **`--from` values:**
 
@@ -128,6 +128,9 @@ Extract structured data from web pages using Zyte's AI extraction engine. All su
 ```bash
 # Extract a single product
 zyte extract product "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html"
+
+# Extract multiple products concurrently (returns a JSON array)
+zyte extract product "https://example.com/product/1" "https://example.com/product/2"
 
 # Extract product list from a category page
 zyte extract product-list "https://books.toscrape.com/"
@@ -173,6 +176,55 @@ zyte extract serp "https://www.google.com/search?q=web+scraping+python"
 
 # Fetch only 2 pages of results
 zyte extract serp "https://www.google.com/search?q=scrapy" --pages 2
+```
+
+#### Piping navigation URLs into extraction
+
+The three navigation subcommands (`product-navigation`, `article-navigation`, `job-navigation`) support two pipe-friendly flags:
+
+| Flag | Description |
+|---|---|
+| `--output-urls` | Print item URLs one per line (skips next-page URL) |
+| `--next-page-url` | Print only the next page URL; exits `1` if there is no next page |
+
+```bash
+# Get all product URLs from a listing page as plain text
+zyte extract product-navigation "https://books.toscrape.com/" --output-urls
+
+# Pipe directly into extract product (fetches all concurrently, returns JSON array)
+zyte extract product-navigation "https://books.toscrape.com/" --output-urls \
+  | xargs zyte extract product
+
+# Filter the results with jq — show only product names
+zyte extract product-navigation "https://books.toscrape.com/" --output-urls \
+  | xargs zyte extract product \
+  | jq '[.[].data.name]'
+
+# Name + price as tab-separated text
+zyte extract product-navigation "https://books.toscrape.com/" --output-urls \
+  | xargs zyte extract product \
+  | jq -r '.[] | "\(.data.name)\t\(.data.price)"'
+
+# Same with articles
+zyte extract article-navigation "https://www.bbc.com/news" --output-urls \
+  | xargs zyte extract article
+
+# Crawl all pages of a listing and extract every product
+URL="https://books.toscrape.com/"
+while [ -n "$URL" ]; do
+  zyte extract product-navigation "$URL" --output-urls | xargs zyte extract product
+  URL=$(zyte extract product-navigation "$URL" --next-page-url) || break
+done
+```
+
+`--output-urls` aggregates item URLs across multiple listing pages when more than one URL is passed:
+
+```bash
+# Scrape two category pages concurrently, pipe all product URLs into extract
+zyte extract product-navigation \
+  "https://example.com/category/phones" \
+  "https://example.com/category/laptops" \
+  --output-urls | xargs zyte extract product
 ```
 
 #### Output options (all extract subcommands)
@@ -287,7 +339,7 @@ Use `-o` / `--output` to write output to a file instead of stdout. Use `-q` / `-
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1` | API error (unexpected response, network error, etc.) |
+| `1` | API error (unexpected response, network error, etc.); also used by `--next-page-url` when there is no next page |
 | `2` | Invalid request (bad arguments or payload) |
 | `3` | Authentication error (missing or invalid API key) |
 
@@ -300,3 +352,5 @@ Use `-o` / `--output` to write output to a file instead of stdout. Use `-q` / `-
 | `ZYTE_API_KEY` | Zyte API key (required for all non-cloud commands) |
 | `SCRAPY_CLOUD_API_KEY` | Scrapy Cloud API key (required for `zyte cloud` commands) |
 | `SHUB_APIKEY` | Alternative Scrapy Cloud API key variable |
+| `ZYTE_BASE_URL` | Override the Zyte API base URL (default: `https://api.zyte.com/v1/extract`) |
+| `NO_COLOR` | Disable all Rich colour output when set (any value) |

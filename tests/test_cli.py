@@ -228,6 +228,131 @@ def test_cli_extract_invalid_from(monkeypatch):
     assert result.exit_code == 2
 
 
+def test_cli_extract_product_multi_url(monkeypatch):
+    """Multiple URLs should return a JSON array, one result per URL."""
+    call_count = 0
+
+    async def fake_extract(self, payload):
+        nonlocal call_count
+        call_count += 1
+        return {
+            "url": payload["url"],
+            "statusCode": 200,
+            "product": {"name": f"Widget from {payload['url']}"},
+        }
+
+    monkeypatch.setattr(ZyteClient, "extract", fake_extract)
+    result = runner.invoke(app, [
+        "--api-key", "test", "extract", "product",
+        "https://example.com/p1",
+        "https://example.com/p2",
+    ])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    assert len(data) == 2
+    assert call_count == 2
+    urls_returned = {item["url"] for item in data}
+    assert urls_returned == {"https://example.com/p1", "https://example.com/p2"}
+
+
+def test_cli_extract_product_single_url_returns_object(monkeypatch):
+    """A single URL should still return a single JSON object, not an array."""
+    _mock_client_ctx(monkeypatch, {
+        "url": "https://example.com/product",
+        "statusCode": 200,
+        "product": {"name": "Widget"},
+    })
+    result = runner.invoke(app, ["--api-key", "test", "extract", "product", "https://example.com/product"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert isinstance(data, dict)
+    assert data["data"]["name"] == "Widget"
+
+
+_NAV_RESPONSE = {
+    "url": "https://example.com/shop",
+    "statusCode": 200,
+    "productNavigation": {
+        "url": "https://example.com/shop",
+        "nextPage": {"url": "https://example.com/shop?page=2"},
+        "items": [
+            {"url": "https://example.com/product/1"},
+            {"url": "https://example.com/product/2"},
+        ],
+    },
+}
+
+
+def test_cli_extract_product_navigation_output_urls(monkeypatch):
+    """--output-urls prints item URLs one per line."""
+    _mock_client_ctx(monkeypatch, _NAV_RESPONSE)
+    result = runner.invoke(app, [
+        "--api-key", "test", "extract", "product-navigation",
+        "https://example.com/shop", "--output-urls",
+    ])
+    assert result.exit_code == 0
+    lines = result.output.strip().splitlines()
+    assert lines == ["https://example.com/product/1", "https://example.com/product/2"]
+
+
+def test_cli_extract_product_navigation_next_page_url(monkeypatch):
+    """--next-page-url prints the next page URL and exits 0."""
+    _mock_client_ctx(monkeypatch, _NAV_RESPONSE)
+    result = runner.invoke(app, [
+        "--api-key", "test", "extract", "product-navigation",
+        "https://example.com/shop", "--next-page-url",
+    ])
+    assert result.exit_code == 0
+    assert result.output.strip() == "https://example.com/shop?page=2"
+
+
+def test_cli_extract_product_navigation_next_page_url_missing(monkeypatch):
+    """--next-page-url exits 1 when there is no next page."""
+    _mock_client_ctx(monkeypatch, {
+        "url": "https://example.com/shop",
+        "statusCode": 200,
+        "productNavigation": {
+            "url": "https://example.com/shop",
+            "items": [{"url": "https://example.com/product/1"}],
+        },
+    })
+    result = runner.invoke(app, [
+        "--api-key", "test", "extract", "product-navigation",
+        "https://example.com/shop", "--next-page-url",
+    ])
+    assert result.exit_code == 1
+    assert result.output.strip() == ""
+
+
+def test_cli_extract_product_navigation_output_urls_multi(monkeypatch):
+    """--output-urls with multiple listing pages aggregates all item URLs."""
+    call_urls = []
+
+    async def fake_extract(self, payload):
+        call_urls.append(payload["url"])
+        page = 2 if "page2" in payload["url"] else 1
+        return {
+            "url": payload["url"],
+            "statusCode": 200,
+            "productNavigation": {
+                "url": payload["url"],
+                "items": [{"url": f"https://example.com/product/p{page}-{i}"} for i in range(2)],
+            },
+        }
+
+    monkeypatch.setattr(ZyteClient, "extract", fake_extract)
+    result = runner.invoke(app, [
+        "--api-key", "test", "extract", "product-navigation",
+        "https://example.com/shop", "https://example.com/page2",
+        "--output-urls",
+    ])
+    assert result.exit_code == 0
+    lines = result.output.strip().splitlines()
+    assert len(lines) == 4
+    assert len(call_urls) == 2
+
+
 def test_cli_fetch_mutual_body_exclusion():
     result = runner.invoke(app, [
         "--api-key", "test", "fetch", "https://example.com",

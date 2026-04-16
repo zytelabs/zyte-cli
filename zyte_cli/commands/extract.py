@@ -26,6 +26,22 @@ OutputFormatArg = Annotated[OutputFormat, typer.Option("--output-format", "-f", 
 OutputArg = Annotated[Optional[str], typer.Option("--output", "-o", help="Write output to file")]
 QuietArg = Annotated[bool, typer.Option("--quiet", "-q", help="Suppress progress output")]
 GeoArg = Annotated[Optional[str], typer.Option("--geolocation", help="ISO 3166-1 alpha-2 country code")]
+OutputUrlsArg = Annotated[
+    bool,
+    typer.Option(
+        "--output-urls",
+        help="Print item URLs one per line instead of JSON (pipe-friendly). "
+             "Multiple listing pages aggregate all URLs.",
+    ),
+]
+NextPageUrlArg = Annotated[
+    bool,
+    typer.Option(
+        "--next-page-url",
+        help="Print the next page URL only (exits 1 if there is no next page). "
+             "Useful for crawl loops.",
+    ),
+]
 
 
 _EXTRACT_FROM_MAP = {
@@ -72,173 +88,271 @@ async def _run_extraction(settings, payload: dict, field: str, url: str) -> dict
         return _build_result(raw, field, url)
 
 
+async def _run_extractions(
+    settings,
+    urls: list[str],
+    field: str,
+    extract_from: str | None,
+    geolocation: str | None,
+) -> dict | list[dict]:
+    ef = _resolve_extract_from(extract_from)
+    async with ZyteClient(settings) as client:
+
+        async def _fetch(url: str) -> dict:
+            payload = _build_payload(url, field, ef, geolocation)
+            raw = await client.extract(payload)
+            return _build_result(raw, field, url)
+
+        results = await asyncio.gather(*[_fetch(u) for u in urls])
+    return results[0] if len(results) == 1 else list(results)
+
+
+def _print_output_urls(result: dict | list[dict]) -> None:
+    """Print item URLs one per line from one or more navigation results."""
+    results = result if isinstance(result, list) else [result]
+    for r in results:
+        data = r.get("data") or {}
+        for item in data.get("items") or []:
+            url = item.get("url")
+            if url:
+                print(url)
+
+
+def _print_next_page_url(result: dict | list[dict]) -> None:
+    """Print the next page URL from the first navigation result, or exit 1 if absent."""
+    first = result[0] if isinstance(result, list) else result
+    data = first.get("data") or {}
+    next_url = (data.get("nextPage") or {}).get("url", "")
+    if next_url:
+        print(next_url)
+    else:
+        raise typer.Exit(1)
+
+
 @app.command("product")
 def extract_product(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Product detail page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Product detail page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
 ) -> None:
-    """Extract structured product data from a product detail page."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "product", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "product", url))
+    """Extract structured product data from one or more product detail pages.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "product", extract_from, geolocation))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
 @app.command("product-list")
 def extract_product_list(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Product listing or category page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Product listing or category page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
 ) -> None:
-    """Extract a list of products from a product listing or category page."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "productList", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "productList", url))
+    """Extract a list of products from one or more product listing or category pages.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "productList", extract_from, geolocation))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
 @app.command("product-navigation")
 def extract_product_navigation(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Product listing page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Product listing page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
+    output_urls: OutputUrlsArg = False,
+    next_page_url: NextPageUrlArg = False,
 ) -> None:
-    """Extract product navigation (next page, sub-categories, product links) from a listing page."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "productNavigation", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "productNavigation", url))
+    """Extract product navigation (next page, sub-categories, product links) from one or more listing pages.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+
+    Use --output-urls to get a newline-delimited list of product URLs for piping:
+
+        zyte extract product-navigation https://shop.com/phones --output-urls \\
+          | xargs zyte extract product
+
+    Use --next-page-url to get just the next pagination URL (exits 1 if no next page):
+
+        URL=$(zyte extract product-navigation https://shop.com/phones --next-page-url) || break
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "productNavigation", extract_from, geolocation))
+    if output_urls:
+        _print_output_urls(result)
+        return
+    if next_page_url:
+        _print_next_page_url(result)
+        return
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
 @app.command("article")
 def extract_article(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Article or news page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Article or news page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
 ) -> None:
-    """Extract structured article data (headline, author, date, body)."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "article", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "article", url))
+    """Extract structured article data (headline, author, date, body) from one or more pages.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "article", extract_from, geolocation))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
 @app.command("article-list")
 def extract_article_list(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Article listing or news index page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Article listing or news index page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
 ) -> None:
-    """Extract a list of articles with summaries from a news/blog index page."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "articleList", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "articleList", url))
+    """Extract a list of articles with summaries from one or more news/blog index pages.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "articleList", extract_from, geolocation))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
 @app.command("article-navigation")
 def extract_article_navigation(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Article listing page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Article listing page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
+    output_urls: OutputUrlsArg = False,
+    next_page_url: NextPageUrlArg = False,
 ) -> None:
-    """Extract article navigation (next page link, article links) from a listing page."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "articleNavigation", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "articleNavigation", url))
+    """Extract article navigation (next page link, article links) from one or more listing pages.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+
+    Use --output-urls to get a newline-delimited list of article URLs for piping:
+
+        zyte extract article-navigation https://blog.com/posts --output-urls \\
+          | xargs zyte extract article
+
+    Use --next-page-url to get just the next pagination URL (exits 1 if no next page).
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "articleNavigation", extract_from, geolocation))
+    if output_urls:
+        _print_output_urls(result)
+        return
+    if next_page_url:
+        _print_next_page_url(result)
+        return
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
 @app.command("page")
 def extract_page(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
 ) -> None:
-    """Extract readable page content from any page."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "pageContent", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "pageContent", url))
+    """Extract readable page content from one or more pages.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "pageContent", extract_from, geolocation))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
 @app.command("forum-thread")
 def extract_forum_thread(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Forum thread page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Forum thread page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
 ) -> None:
-    """Extract forum thread data (topic and posts with reactions)."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "forumThread", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "forumThread", url))
+    """Extract forum thread data (topic and posts with reactions) from one or more threads.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "forumThread", extract_from, geolocation))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
 @app.command("job-posting")
 def extract_job_posting(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Job posting detail page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Job posting detail page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
 ) -> None:
-    """Extract job posting data (title, description, salary, location, hiring org)."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "jobPosting", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "jobPosting", url))
+    """Extract job posting data (title, description, salary, location, hiring org) from one or more pages.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "jobPosting", extract_from, geolocation))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
 @app.command("job-navigation")
 def extract_job_navigation(
     ctx: typer.Context,
-    url: Annotated[str, typer.Argument(help="Job listing index page URL")],
+    urls: Annotated[list[str], typer.Argument(help="Job listing index page URL(s)")],
     extract_from: ExtractFromArg = None,
     geolocation: GeoArg = None,
     output_format: OutputFormatArg = OutputFormat.json,
     output: OutputArg = None,
     quiet: QuietArg = False,
+    output_urls: OutputUrlsArg = False,
+    next_page_url: NextPageUrlArg = False,
 ) -> None:
-    """Extract job posting navigation (next page link, job links) from a listing page."""
-    ef = _resolve_extract_from(extract_from)
-    payload = _build_payload(url, "jobPostingNavigation", ef, geolocation)
-    result = asyncio.run(_run_extraction(ctx.obj["settings"], payload, "jobPostingNavigation", url))
+    """Extract job posting navigation (next page link, job links) from one or more listing pages.
+
+    Pass multiple URLs to fetch concurrently and receive a JSON array of results.
+
+    Use --output-urls to get a newline-delimited list of job URLs for piping:
+
+        zyte extract job-navigation https://jobs.com/engineering --output-urls \\
+          | xargs zyte extract job-posting
+
+    Use --next-page-url to get just the next pagination URL (exits 1 if no next page).
+    """
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "jobPostingNavigation", extract_from, geolocation))
+    if output_urls:
+        _print_output_urls(result)
+        return
+    if next_page_url:
+        _print_next_page_url(result)
+        return
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 

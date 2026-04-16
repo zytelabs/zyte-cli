@@ -11,10 +11,10 @@ import typer
 from scrapinghub import ScrapinghubClient
 
 from zyte_cli.config import get_scrapy_cloud_settings
-from zyte_cli.output import OutputFormat, print_result, print_error
+from zyte_cli.output import OutputFormat, print_result, print_error, print_verbose, print_dry_run
 
 app = typer.Typer(help="Manage Scrapy Cloud projects, spiders, and jobs.")
-jobs_app = typer.Typer(help="Job management subcommands.")
+jobs_app = typer.Typer(help="List, cancel, tag, and inspect Scrapy Cloud jobs. Job keys use the format <project>/<spider>/<job> (e.g. 123/1/45).")
 app.add_typer(jobs_app, name="jobs")
 
 OutputFormatArg = Annotated[OutputFormat, typer.Option("--output-format", "-f", help="Output format")]
@@ -34,10 +34,21 @@ def cloud_deploy(
     project_id: Annotated[Optional[int], typer.Option("--project-id", "-p", help="Scrapy Cloud project ID")] = None,
     quiet: QuietArg = False,
 ) -> None:
-    """Deploy the current Scrapy project to Scrapy Cloud (wraps shub deploy)."""
+    """Deploy the current Scrapy project to Scrapy Cloud (wraps shub deploy).
+
+    Requires 'shub' to be installed: pip install shub
+
+    Run from the root of a Scrapy project directory. If --project-id is omitted,
+    shub will use the project configured in scrapinghub.yml.
+    """
     cmd = ["shub", "deploy"]
     if project_id is not None:
         cmd.append(str(project_id))
+
+    dry_run = ctx.obj.get("dry_run", False)
+    if dry_run:
+        print_dry_run({"command": cmd}, label="DRY RUN — would run:")
+        raise typer.Exit(0)
 
     try:
         result = subprocess.run(cmd, check=True)
@@ -68,7 +79,18 @@ def cloud_run(
     output: OutputArg = None,
     quiet: QuietArg = False,
 ) -> None:
-    """Run a spider job on Scrapy Cloud."""
+    """Run a spider job on Scrapy Cloud.
+
+    Spider arguments and settings are passed as KEY=VALUE pairs (repeatable):
+
+        zyte cloud run my_spider -p 12345 -a start_url=https://example.com -s CONCURRENT_REQUESTS=8
+
+    Priority ranges from 0 (lowest) to 4 (highest). Units control how many
+    parallel execution units the job uses (affects billing).
+
+    Returns the job key (e.g. 12345/1/7) which can be used with other
+    'zyte cloud jobs' and 'zyte cloud items/logs/requests' commands.
+    """
     client = _get_cloud_client(ctx)
 
     job_args: dict = {}
@@ -87,23 +109,41 @@ def cloud_run(
         k, v = s.split("=", 1)
         job_settings[k.strip()] = v.strip()
 
+    kwargs: dict = {}
+    if job_args:
+        kwargs["job_args"] = job_args
+    if job_settings:
+        kwargs["job_settings"] = job_settings
+    if units is not None:
+        kwargs["units"] = units
+    if priority is not None:
+        kwargs["priority"] = priority
+    if tag:
+        kwargs["add_tag"] = tag
+
+    dry_run = ctx.obj.get("dry_run", False)
+    verbose = ctx.obj.get("verbose", False)
+
+    if dry_run:
+        print_dry_run(
+            {"project": project, "spider": spider, **kwargs},
+            label="DRY RUN — would run spider:",
+        )
+        raise typer.Exit(0)
+
+    if verbose:
+        print_verbose("→ Scrapy Cloud job kwargs", {"project": project, "spider": spider, **kwargs})
+
     def _run():
         proj = client.get_project(project)
-        kwargs: dict = {}
-        if job_args:
-            kwargs["job_args"] = job_args
-        if job_settings:
-            kwargs["job_settings"] = job_settings
-        if units is not None:
-            kwargs["units"] = units
-        if priority is not None:
-            kwargs["priority"] = priority
-        if tag:
-            kwargs["add_tag"] = tag
         job = proj.jobs.run(spider, **kwargs)
         return job.key
 
     job_key = asyncio.run(asyncio.to_thread(_run))
+
+    if verbose:
+        print_verbose("← Job key", {"job_key": job_key})
+
     print_result({"job_key": job_key}, fmt=output_format, output_file=output, quiet=quiet)
 
 

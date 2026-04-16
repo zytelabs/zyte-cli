@@ -6,16 +6,16 @@ A command-line interface for the [Zyte API](https://docs.zyte.com/zyte-api/get-s
 
 ## Installation
 
-Requires Python 3.13+.
+Not available on PyPI. Install from source using [uv](https://docs.astral.sh/uv/) (requires Python 3.13+):
 
 ```bash
-pip install zyte-cli
+git clone https://github.com/zytelabs/zyte-cli /tmp/zyte-cli && uv tool install /tmp/zyte-cli
 ```
 
-Or with [uv](https://docs.astral.sh/uv/):
+Verify the install:
 
 ```bash
-uv tool install zyte-cli
+zyte --help
 ```
 
 ## Authentication

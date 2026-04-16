@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 from typing import Any
 
 import httpx
@@ -54,8 +55,17 @@ class ZyteClient:
             print_dry_run(payload)
             raise typer.Exit(0)
 
+        # Derive a short label for logging: the extraction field name or fetch type
+        _field = next(
+            (k for k in payload if k not in {"url", "extractFrom", "geolocation", "serpOptions"} and payload[k] is True),
+            "request",
+        )
+        _url = payload.get("url", "")
+
         if self.settings.verbose:
-            print_verbose("→ Request payload", payload)
+            print_verbose(f"→ POST {self.settings.base_url}  [{_field}]  {_url}", payload)
+
+        t0 = time.monotonic()
 
         async def operation() -> dict[str, Any]:
             response = await self._client.post(
@@ -64,12 +74,9 @@ class ZyteClient:
                 json=payload,
                 headers={"Accept": "application/json"},
             )
-            return await self._handle_response(response)
+            return await self._handle_response(response, elapsed_start=t0, verbose=self.settings.verbose)
 
         result = await self._retry(operation)
-
-        if self.settings.verbose:
-            print_verbose("← Response", result)
 
         return result
 
@@ -94,13 +101,25 @@ class ZyteClient:
                 attempt += 1
                 await asyncio.sleep(_compute_delay(attempt, rate_limit=rate_limit))
 
-    async def _handle_response(self, response: httpx.Response) -> dict[str, Any]:
+    async def _handle_response(self, response: httpx.Response, elapsed_start: float | None = None, verbose: bool = False) -> dict[str, Any]:
         payload: dict[str, Any] | None = None
         if response.content:
             try:
                 payload = response.json()
             except json.JSONDecodeError:
                 payload = None
+
+        elapsed_ms = int((time.monotonic() - elapsed_start) * 1000) if elapsed_start is not None else None
+
+        if verbose and elapsed_ms is not None:
+            from zyte_cli.output import _err_console
+            status_color = "green" if response.status_code < 400 else "red"
+            _err_console.print(
+                f"[bold {status_color}]← {response.status_code}[/bold {status_color}]  "
+                f"[dim]{elapsed_ms}ms[/dim]"
+            )
+            if payload:
+                print_verbose("← Response", payload)
 
         if response.status_code >= 400:
             raise build_zyte_error(response.status_code, payload)

@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import typer
 
 from zyte_cli.client import ZyteClient
-from zyte_cli.output import OutputFormat, print_result
+from zyte_cli.output import OutputFormat, print_result, progress_spinner
 
 app = typer.Typer(help="Extract structured data from web pages using Zyte AI.")
 
@@ -94,16 +94,30 @@ async def _run_extractions(
     field: str,
     extract_from: str | None,
     geolocation: str | None,
+    quiet: bool = False,
 ) -> dict | list[dict]:
     ef = _resolve_extract_from(extract_from)
-    async with ZyteClient(settings) as client:
+    total = len(urls)
+    completed = 0
+    lock = asyncio.Lock()
 
-        async def _fetch(url: str) -> dict:
-            payload = _build_payload(url, field, ef, geolocation)
-            raw = await client.extract(payload)
-            return _build_result(raw, field, url)
+    with progress_spinner(
+        f"Extracting {field} from {total} URL{'s' if total != 1 else ''}...",
+        quiet=quiet or total == 1,
+    ) as spinner:
+        async with ZyteClient(settings) as client:
 
-        results = await asyncio.gather(*[_fetch(u) for u in urls])
+            async def _fetch(url: str) -> dict:
+                nonlocal completed
+                payload = _build_payload(url, field, ef, geolocation)
+                raw = await client.extract(payload)
+                async with lock:
+                    completed += 1
+                    if total > 1:
+                        spinner.update(f"Extracting {field}... {completed}/{total} done")
+                return _build_result(raw, field, url)
+
+            results = await asyncio.gather(*[_fetch(u) for u in urls])
     return results[0] if len(results) == 1 else list(results)
 
 
@@ -143,7 +157,7 @@ def extract_product(
 
     Pass multiple URLs to fetch concurrently and receive a JSON array of results.
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "product", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "product", extract_from, geolocation, quiet=quiet))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
@@ -161,7 +175,7 @@ def extract_product_list(
 
     Pass multiple URLs to fetch concurrently and receive a JSON array of results.
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "productList", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "productList", extract_from, geolocation, quiet=quiet))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
@@ -190,7 +204,7 @@ def extract_product_navigation(
 
         URL=$(zyte extract product-navigation https://shop.com/phones --next-page-url) || break
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "productNavigation", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "productNavigation", extract_from, geolocation, quiet=quiet))
     if output_urls:
         _print_output_urls(result)
         return
@@ -214,7 +228,7 @@ def extract_article(
 
     Pass multiple URLs to fetch concurrently and receive a JSON array of results.
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "article", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "article", extract_from, geolocation, quiet=quiet))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
@@ -232,7 +246,7 @@ def extract_article_list(
 
     Pass multiple URLs to fetch concurrently and receive a JSON array of results.
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "articleList", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "articleList", extract_from, geolocation, quiet=quiet))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
@@ -259,7 +273,7 @@ def extract_article_navigation(
 
     Use --next-page-url to get just the next pagination URL (exits 1 if no next page).
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "articleNavigation", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "articleNavigation", extract_from, geolocation, quiet=quiet))
     if output_urls:
         _print_output_urls(result)
         return
@@ -283,7 +297,7 @@ def extract_page(
 
     Pass multiple URLs to fetch concurrently and receive a JSON array of results.
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "pageContent", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "pageContent", extract_from, geolocation, quiet=quiet))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
@@ -301,7 +315,7 @@ def extract_forum_thread(
 
     Pass multiple URLs to fetch concurrently and receive a JSON array of results.
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "forumThread", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "forumThread", extract_from, geolocation, quiet=quiet))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
@@ -319,7 +333,7 @@ def extract_job_posting(
 
     Pass multiple URLs to fetch concurrently and receive a JSON array of results.
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "jobPosting", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "jobPosting", extract_from, geolocation, quiet=quiet))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
@@ -346,7 +360,7 @@ def extract_job_navigation(
 
     Use --next-page-url to get just the next pagination URL (exits 1 if no next page).
     """
-    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "jobPostingNavigation", extract_from, geolocation))
+    result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "jobPostingNavigation", extract_from, geolocation, quiet=quiet))
     if output_urls:
         _print_output_urls(result)
         return
@@ -391,20 +405,32 @@ def extract_serp(
         if ef:
             serp_options["extractFrom"] = ef
 
-        async with ZyteClient(ctx.obj["settings"]) as client:
-            async def fetch_page(page: int) -> dict:
-                payload: dict = {
-                    "url": _page_url(url, page),
-                    "serp": True,
-                }
-                if serp_options:
-                    payload["serpOptions"] = serp_options
-                if geolocation:
-                    payload["geolocation"] = geolocation
-                return await client.extract(payload)
+        pages_count = max(1, pages)
+        completed = 0
+        lock = asyncio.Lock()
 
-            pages_count = max(1, pages)
-            raws = await asyncio.gather(*[fetch_page(p) for p in range(1, pages_count + 1)])
+        with progress_spinner(
+            f"Fetching SERP page 1/{pages_count}...",
+            quiet=quiet or pages_count == 1,
+        ) as spinner:
+            async with ZyteClient(ctx.obj["settings"]) as client:
+                async def fetch_page(page: int) -> dict:
+                    nonlocal completed
+                    payload: dict = {
+                        "url": _page_url(url, page),
+                        "serp": True,
+                    }
+                    if serp_options:
+                        payload["serpOptions"] = serp_options
+                    if geolocation:
+                        payload["geolocation"] = geolocation
+                    result = await client.extract(payload)
+                    async with lock:
+                        completed += 1
+                        spinner.update(f"Fetching SERP... {completed}/{pages_count} pages done")
+                    return result
+
+                raws = await asyncio.gather(*[fetch_page(p) for p in range(1, pages_count + 1)])
 
         all_results: list = []
         for raw in raws:

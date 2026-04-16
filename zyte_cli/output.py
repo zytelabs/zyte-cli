@@ -7,10 +7,13 @@ import io
 import json
 import os
 import sys
+from contextlib import contextmanager
 from enum import Enum
-from typing import Any
+from typing import Any, Generator
 
 from rich.console import Console
+from rich.live import Live
+from rich.spinner import Spinner
 from rich.syntax import Syntax
 from rich.table import Table
 
@@ -83,6 +86,42 @@ def print_dry_run(payload: Any, label: str = "DRY RUN — would send to Zyte API
     rendered = json.dumps(payload, indent=2, default=str)
     _err_console.print(f"\n[bold yellow]{label}[/bold yellow]")
     _err_console.print(Syntax(rendered, "json", theme="monokai", word_wrap=True))
+
+
+class _SpinnerState:
+    """Mutable container so the spinner label can be updated from async tasks."""
+    def __init__(self, message: str) -> None:
+        self.message = message
+        self._spinner = Spinner("dots", text=message)
+
+    def update(self, message: str) -> None:
+        self.message = message
+        self._spinner = Spinner("dots", text=message)
+
+    def __rich__(self) -> Spinner:
+        return self._spinner
+
+
+@contextmanager
+def progress_spinner(
+    message: str,
+    quiet: bool = False,
+) -> Generator[_SpinnerState, None, None]:
+    """Context manager that shows a Rich spinner on stderr while work is in progress.
+
+    Yields a _SpinnerState whose .update(msg) method changes the displayed text.
+    The spinner is suppressed when quiet=True, NO_COLOR is set, or stderr is not a TTY.
+    """
+    if quiet or _no_color or not _err_console.is_terminal:
+        state = _SpinnerState(message)
+        if not quiet and _err_console.is_terminal:
+            _err_console.print(f"[dim]{message}[/dim]")
+        yield state
+        return
+
+    state = _SpinnerState(message)
+    with Live(state, console=_err_console, transient=True, refresh_per_second=12):
+        yield state
 
 
 def _render(data: Any, fmt: OutputFormat) -> str:

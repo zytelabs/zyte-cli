@@ -1,0 +1,1 @@
+"""Zyte CLI package."""

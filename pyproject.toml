@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zyte-cli"
+version = "0.1.0"
+description = "A CLI tool for the Zyte API and Scrapy Cloud"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "typer>=0.12",
+    "httpx>=0.28",
+    "pydantic>=2.12",
+    "rich>=13",
+    "scrapinghub[msgpack]>=2.4.0",
+]
+
+[project.scripts]
+zyte = "zyte_cli.cli:run"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["zyte_cli"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

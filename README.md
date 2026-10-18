@@ -168,6 +168,53 @@ zyte extract job-posting "https://jobs.example.com/position/456"
 zyte extract job-navigation "https://jobs.example.com/"
 ```
 
+#### Markdown
+
+Extract a page as Markdown with `zyte extract markdown URL [URL...]`:
+
+```bash
+# Extract one page (JSON output)
+zyte extract markdown "https://example.com"
+
+# Extract multiple pages concurrently (returns a JSON array)
+zyte extract markdown "https://example.com" "https://example.com/about"
+
+# Choose the fetch method: auto (default), http, browser, or browser-only
+zyte extract markdown "https://example.com" --from auto
+zyte extract markdown "https://example.com" --from http
+zyte extract markdown "https://example.com" --from browser
+zyte extract markdown "https://example.com" --from browser-only
+
+# Pass a Markdown extraction scope
+zyte extract markdown "https://example.com" --scope fullPage
+
+# Also request structured page content
+zyte extract markdown "https://example.com" --page-content
+
+# Combine options and save JSON silently
+zyte extract markdown "https://example.com" \
+  --from browser --scope fullPage --page-content --geolocation US \
+  --output-format json --output result.json --quiet
+
+# Save only the Markdown string as a .md file (requires jq)
+zyte extract markdown "https://example.com" | jq -r .data > page.md
+
+# Preview the request without sending it
+zyte --dry-run extract markdown "https://example.com" --scope fullPage
+```
+
+The default request is only `{"url":"https://example.com","markdown":true}`. For Markdown, `--from` sets `markdownOptions.extractFrom` (not a top-level `extractFrom`): `http` maps to `httpResponseBody`, `browser` to `browserHtml`, and `browser-only` to `browserHtmlOnly`. With `auto`, the field is omitted so Zyte chooses the method. The optional `--scope` string is passed as `markdownOptions.scope`, for example `fullPage`.
+
+A single URL returns an object with `url`, `status_code`, and `data`, where **`data` is a Markdown string**, not a structured object:
+
+```json
+{"url":"https://example.com","status_code":200,"data":"# Example\n\nPage text."}
+```
+
+`--page-content` sends `pageContent: true` alongside `markdown: true`. When the API response contains `pageContent`, the result includes an additional top-level `page_content` key containing that raw object (or `null` if the API returns `null`); the key is omitted if the API does not return it. `data` remains the Markdown string. The existing `zyte extract page` command still returns structured page content in `data`.
+
+Markdown supports the standard `--geolocation`, `--output-format`, `--output`, and `--quiet` options. `--output` saves the formatted result, not just the Markdown text; use `jq -r .data` as above to create a `.md` file.
+
 #### Google SERP
 
 ```bash

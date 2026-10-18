@@ -11,7 +11,7 @@ import typer
 from zyte_cli.client import ZyteClient
 from zyte_cli.output import OutputFormat, print_result, progress_spinner
 
-app = typer.Typer(help="Extract structured data from web pages using Zyte AI.")
+app = typer.Typer(help="Extract structured data or Markdown from web pages using Zyte API.")
 
 # Shared extract_from option type
 ExtractFromArg = Annotated[
@@ -75,11 +75,14 @@ def _build_payload(url: str, field: str, extract_from: str | None, geolocation: 
 
 
 def _build_result(raw: dict, field: str, url: str) -> dict:
-    return {
+    result = {
         "url": raw.get("url", url),
         "status_code": raw.get("statusCode"),
         "data": raw.get(field),
     }
+    if field == "markdown" and "pageContent" in raw:
+        result["page_content"] = raw["pageContent"]
+    return result
 
 
 async def _run_extraction(settings, payload: dict, field: str, url: str) -> dict:
@@ -95,6 +98,8 @@ async def _run_extractions(
     extract_from: str | None,
     geolocation: str | None,
     quiet: bool = False,
+    *,
+    payload_options: dict | None = None,
 ) -> dict | list[dict]:
     ef = _resolve_extract_from(extract_from)
     total = len(urls)
@@ -110,6 +115,8 @@ async def _run_extractions(
             async def _fetch(url: str) -> dict:
                 nonlocal completed
                 payload = _build_payload(url, field, ef, geolocation)
+                if payload_options:
+                    payload.update(payload_options)
                 raw = await client.extract(payload)
                 async with lock:
                     completed += 1
@@ -298,6 +305,50 @@ def extract_page(
     Pass multiple URLs to fetch concurrently and receive a JSON array of results.
     """
     result = asyncio.run(_run_extractions(ctx.obj["settings"], urls, "pageContent", extract_from, geolocation, quiet=quiet))
+    print_result(result, fmt=output_format, output_file=output, quiet=quiet)
+
+
+@app.command("markdown")
+def extract_markdown(
+    ctx: typer.Context,
+    urls: Annotated[list[str], typer.Argument(help="Page URL(s)")],
+    extract_from: ExtractFromArg = None,
+    scope: Annotated[
+        Optional[str],
+        typer.Option("--scope", help="Markdown scope (e.g. fullPage); omitted by default to use the API default"),
+    ] = None,
+    page_content: Annotated[
+        bool,
+        typer.Option("--page-content", help="Also extract structured pageContent in the same request"),
+    ] = False,
+    geolocation: GeoArg = None,
+    output_format: OutputFormatArg = OutputFormat.json,
+    output: OutputArg = None,
+    quiet: QuietArg = False,
+) -> None:
+    """Extract Markdown from one or more pages.
+
+    Markdown is returned in the JSON result's data field. Use --page-content
+    to also return structured page content in the page_content field.
+    Multiple URLs are fetched concurrently and return a JSON array.
+    """
+    ef = _resolve_extract_from(extract_from)
+    markdown_options: dict = {}
+    if ef:
+        markdown_options["extractFrom"] = ef
+    if scope is not None:
+        markdown_options["scope"] = scope
+
+    payload_options: dict = {}
+    if markdown_options:
+        payload_options["markdownOptions"] = markdown_options
+    if page_content:
+        payload_options["pageContent"] = True
+
+    result = asyncio.run(_run_extractions(
+        ctx.obj["settings"], urls, "markdown", None, geolocation,
+        quiet=quiet, payload_options=payload_options,
+    ))
     print_result(result, fmt=output_format, output_file=output, quiet=quiet)
 
 
